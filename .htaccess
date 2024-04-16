@@ -3,14 +3,19 @@ RewriteEngine On
 # Prevent directory listings
 Options -Indexes
 
-# Force HTTPS (optional, but recommended for security)
+# Force HTTPS for all incoming requests
 RewriteCond %{HTTPS} off
 RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
 
-# Redirect requests to redirect.php, only if the query string is a valid URL
-RewriteCond %{THE_REQUEST} \s/\?(https?://.+)\s [NC]
-RewriteRule ^ /redirect.php?url=%1 [L,R=301]
+# Redirect all traffic directly to redirect.php with original query preserved
+RewriteCond %{QUERY_STRING} ^(https?://.*)$ [NC]  # Captures URLs directly after the '?'
+RewriteRule ^/?$ /redirect.php?url=%1 [L,R=301]
+
+# Handle non-http(s) URL inputs directly after '?'
+RewriteCond %{QUERY_STRING} ^([^https].*)$ [NC]  # Captures any other input directly after the '?'
+RewriteRule ^/?$ /redirect.php?url=http://%1 [L,R=301]
 
 # Custom error pages
 ErrorDocument 404 /404.html
 ErrorDocument 500 /500.html
+
