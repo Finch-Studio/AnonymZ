@@ -40,3 +40,12 @@ AnonymZ.io is open source and free to use. We encourage the community to contrib
 
 Thank you for supporting AnonymZ.io!
 
+# donate
+
+Thank you ❤️ for considering to donate to me. Here are several ways you may do so:
+
+[![PayPal](https://srv-cdn.himpfen.io/badges/paypal/paypal-flat.svg)](https://paypal.me/FinchStudio) 
+
+**Bitcoin (BTC):** `bc1qfnpg8lvw65349utkezqx8j484ng0dlgv4x0cns` <br />
+**Ethereum (ETH):** `0x3F3AAc69d3Eb2A397670651d04355650d39e5d0f` <br />
+**Solana (SOL):** `9J3TdWRXF5EJALtDZcaikqF5vhEihT8AMxnjm3VGkzVL`
