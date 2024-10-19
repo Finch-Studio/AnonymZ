@@ -1,21 +1,46 @@
-RewriteEngine On
+<IfModule mod_rewrite.c>
+    RewriteEngine On
 
-# Prevent directory listings
-Options -Indexes
+    # Prevent directory listings
+    Options -Indexes
 
-# Force HTTPS for all incoming requests
-RewriteCond %{HTTPS} off
-RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
+    # Force HTTPS for all incoming requests
+    RewriteCond %{HTTPS} off
+    RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
 
-# Redirect all traffic directly to redirect.php with original query preserved
-RewriteCond %{QUERY_STRING} ^(https?://.*)$ [NC]  # Captures URLs directly after the '?'
-RewriteRule ^/?$ /redirect.php?url=%1 [L,R=301]
+    # Redirect all traffic directly to redirect.php with original query preserved
+    RewriteCond %{QUERY_STRING} ^(https?://.*)$ [NC]  # Captures URLs directly after the '?'
+    RewriteRule ^/?$ /redirect.php?url=%1 [L,R=301]
 
-# Handle non-http(s) URL inputs directly after '?'
-RewriteCond %{QUERY_STRING} ^([^https].*)$ [NC]  # Captures any other input directly after the '?'
-RewriteRule ^/?$ /redirect.php?url=http://%1 [L,R=301]
+    # Handle non-http(s) URL inputs directly after '?'
+    RewriteCond %{QUERY_STRING} ^([^https].*)$ [NC]  # Captures any other input directly after the '?'
+    RewriteRule ^/?$ /redirect.php?url=http://%1 [L,R=301]
 
-# Custom error pages
-ErrorDocument 404 /404.html
-ErrorDocument 500 /500.html
+    # Custom error pages
+    ErrorDocument 404 /404.html
+    ErrorDocument 500 /500.html
 
+    # Add essential security headers
+    <IfModule mod_headers.c>
+        # Enable Strict-Transport-Security (HSTS) to enforce HTTPS
+        Header always set Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+
+        # X-Frame-Options to prevent clickjacking
+        Header always set X-Frame-Options "DENY"
+
+        # X-Content-Type-Options to prevent MIME-type sniffing
+        Header set X-Content-Type-Options "nosniff"
+
+        # Referrer-Policy to limit information leakage
+        Header set Referrer-Policy "no-referrer-when-downgrade"
+
+        # Permissions-Policy to limit browser feature use
+        Header set Permissions-Policy "geolocation=(), microphone=(), camera=()"
+
+        # Content-Security-Policy (adjusted to prevent breaking site functionality)
+        Header set Content-Security-Policy "default-src 'self' https://anonymz.io; script-src 'self' 'unsafe-inline' https://anonymz.io; style-src 'self' 'unsafe-inline'; img-src 'self';"
+    </IfModule>
+
+    # Disable server signature for security
+    ServerSignature Off
+</IfModule>
