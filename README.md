@@ -1,90 +1,102 @@
 # AnonymZ.io
 
-Welcome to AnonymZ.io, a service dedicated to anonymizing links for various platforms. Our goal is to enhance privacy and security by masking the source of web traffic and acting as a referrer—ensuring a safer online environment for users.
+AnonymZ.io is a PHP link redirector that strips referrer, tracking, and affiliate data from a destination URL before forwarding the client to it. It runs on Apache with `mod_rewrite` and `mod_headers`, plus PHP with the `curl` extension.
 
-## Overview
+## Request Flow
 
-AnonymZ.io provides a crucial layer of security in today's digital landscape. By anonymizing links and functioning as a referrer, we protect users' privacy and prevent tracking of web traffic sources. This service is essential for maintaining the confidentiality of online activities, especially for services handling sensitive information.
+There are two ways to invoke the redirector:
 
-## How It Works
+1. **Root passthrough**: `https://anonymz.io/?<destination>`
+   `.htaccess` matches requests to `/` that carry a non-empty query string and internally rewrites them to `redirect.php`, preserving `REQUEST_URI` unchanged. `redirect.php` reads the destination directly from `REQUEST_URI` (everything after `/?`), which PHP has not decoded at all, so it undergoes exactly one `urldecode()` pass server side.
+2. **Direct query parameter**: `/redirect.php?url=<destination>`
+   PHP decodes `$_GET` values once automatically while parsing the query string, so this path skips the additional server-side decode.
 
-AnonymZ.io processes input URLs via a PHP-based redirector. The tool:
-- **Strips out tracking and affiliate parameters:** Removes unnecessary query parameters for a cleaner URL.
-- **Simplifies Google search URLs:** Retains only the essential search query.
-- **Handles URL normalization:** Ensures that input URLs include a valid scheme (defaulting to `http://` if missing).
+Both paths converge on the same validation and rewrite pipeline in `redirect.php`:
 
-Additionally, our server is configured with a custom `.htaccess` file that:
-- Prevents directory listings.
-- Forces HTTPS for all incoming requests.
-- Redirects traffic directly to `redirect.php` while preserving the original query.
-- Automatically prefixes non-schemed inputs with `http://`.
+1. Reject empty input.
+2. Decode (see above, applied at most once per request regardless of entry point).
+3. Normalize literal spaces to `%20` so `filter_var(..., FILTER_VALIDATE_URL)` does not reject them.
+4. Enforce a maximum URL length of 4096 characters.
+5. Reject `ftp:`, `file:`, `data:`, and `javascript:` schemes.
+6. Reject input with more than one `http(s)://` prefix (for example `https://https://`).
+7. Prepend `https://` if no scheme is present.
+8. Validate the result with `filter_var(..., FILTER_VALIDATE_URL)` and `parse_url()`.
+9. Reject URLs with userinfo in the host (`user@host`) and self-referential redirects back to `anonymz.io` or `www.anonymz.io`.
+10. Strip a leading `www.` from the host.
+11. If the host contains `google.`, drop every query parameter except `q`.
+12. Strip known tracking and affiliate parameters: `ref`, `ref_`, `utm_source`, `utm_medium`, `utm_campaign`, `utm_term`, `utm_content`, `aff`.
+13. Rebuild the URL from its validated parts (scheme, host, port, path, remaining query parameters, fragment).
 
-These features work together to ensure all traffic is securely processed and anonymized before reaching its destination.
+If the rebuilt URL passes validation, the response is a redirect:
 
-## How to Use
+- `Location` header with HTTP 302, for simple query strings.
+- `Refresh` header with a 1 second delay, when the query has more than 3 parameters or the built query string exceeds 100 characters (`shouldDelayRedirect()`), giving the client a moment on an interstitial page.
 
-There are two primary methods to use AnonymZ.io:
+If validation fails at any step, the response is HTTP 200 with an HTML error page (not an HTTP error code, so the failure page itself is cacheable/crawlable behavior should be considered if that matters for your deployment) and, if `$enableFailureWebhook` is set, a failure notification is sent (see below).
 
-1. **Link Anonymization:**  
-   Visit [AnonymZ.io](https://anonymz.io/) and enter the URL you wish to anonymize. The service will generate a new, obscured link that can be shared.  
-   **Example:**
-   ```
-   https://anonymz.io/?https://google.ca
-   ```
-   
-2. **Using as a Referrer:**  
-Append your target URL to `https://anonymz.io/?` in your application or website. This method anonymizes the traffic source, ensuring that the destination site does not receive your original referrer information.
+## Decoding Behavior
 
-## Setup and Deployment
+The redirector decodes exactly one layer of percent-encoding per request, matched to exactly one layer of `encodeURIComponent()` applied client side in `assets/app.js`. Earlier versions of this project decoded in a loop until the string stopped changing; that approach corrupts any destination URL that legitimately contains percent-encoded characters in its own path or query (encoded spaces, encoded punctuation in article titles, a nested encoded URL in a tracking parameter), because each additional pass strips another layer of encoding that was never meant to be touched. If you modify this logic, keep the decode count fixed at one per entry point rather than reintroducing a "decode until stable" loop.
 
-If you want to self-host or contribute to AnonymZ.io, follow these steps:
+## Failure Telemetry
 
-1. **Clone the Repository:**
-```bash
-git clone https://github.com/Finch-Studio/AnonymZ.git
+When `$enableFailureWebhook` is `true`, a failed redirect triggers a POST from `redirect.php` to `internal/error-webhook.php`, tagged with the `X-Internal-Hook` header. That script only accepts requests carrying that header (or CLI invocation) and forwards a Discord embed payload to `$webhookUrl`. The payload contains the error message, a truncated SHA-256 fingerprint of the failed input (not the input itself), and a UTC timestamp. No destination URLs or identifying request data are sent.
+
+`internal/error-webhook.php` ships with a placeholder `$webhookUrl`. Replace it with your actual Discord webhook URL before deploying, and avoid committing the real value to version control.
+
+## Security Headers
+
+`.htaccess` sets the following on every response:
+
+- `Strict-Transport-Security: max-age=31536000; includeSubDomains; preload`
+- `X-Frame-Options: DENY`
+- `X-Content-Type-Options: nosniff`
+- `Referrer-Policy: no-referrer`
+- `Permissions-Policy: geolocation=(), microphone=(), camera=()`
+- `Content-Security-Policy: default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'`
+- `Cache-Control: no-store, no-cache, must-revalidate, max-age=0` and `Pragma: no-cache`, to prevent caching of redirect responses
+
+HTTPS is enforced for all hosts except `localhost` (`RewriteCond %{HTTPS} off` / `RewriteCond %{HTTP_HOST} !^localhost$`).
+
+## File Structure
+
+```
+.htaccess                   Rewrite rules, HTTPS enforcement, security headers
+index.html                  Front-end: URL input form, About/Usage sections
+assets/app.css              Site styling
+assets/app.js                Front-end logic: menu handling, URL encoding, clipboard copy
+redirect.php                 Redirector: validation, rewriting, redirect, error page
+internal/error-webhook.php  Internal-only proxy that forwards failure telemetry to Discord
+404.html / 500.html         Static error pages configured via ErrorDocument
 ```
 
-2. **Server Configuration:**
+## Setup
 
- - Use the provided .htaccess file for handling URL redirection, HTTPS enforcement, and security settings.
- - The .htaccess file ensures:
-  - Directory listings are prevented.
-  - All incoming traffic is forced to use HTTPS.
-  - URLs passed via the query string are correctly normalized and redirected to redirect.php.
-
-3. **Customize the PHP Code (if needed):**
-
- - Modify redirect.php for additional sanitization or to adjust delay logic according to your requirements.
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/Afinity-Labs/AnonymZ.git
+   ```
+2. Point an Apache vhost with `mod_rewrite` and `mod_headers` enabled at the repository root, and confirm `AllowOverride All` (or the equivalent) so `.htaccess` is honored.
+3. Confirm PHP has the `curl` extension enabled (required by `redirect.php` and `internal/error-webhook.php`).
+4. Set `$selfHosts` in `redirect.php` to match your domain(s), so the self-redirect check works correctly.
+5. Set `$webhookUrl` in `internal/error-webhook.php` to your real Discord webhook URL, or set `$enableFailureWebhook = false` in `redirect.php` to disable failure telemetry entirely.
 
 ## Contributing
 
-We welcome contributions from the community! If you have suggestions for improvements or new features, feel free to fork this repository and submit a pull request with your changes.
-
-### Adding Changes
-
 1. Fork the repository.
-2. Create a new branch:
-   ```bash
-   git checkout -b feature-branch
-   ```
-  
-3. Make your changes and commit them:
-   ```bash
-   git commit -am 'Add some feature'
-   ```
-4. Push to the branch:
-   ```bash
-   git push origin feature-branch
-   ```
-5. Create a new Pull Request.
+2. Create a branch: `git checkout -b feature-branch`
+3. Commit your changes: `git commit -am 'Add some feature'`
+4. Push the branch: `git push origin feature-branch`
+5. Open a pull request.
 
-### Adding Comments or Suggestions
-
-If you have feedback or ideas for enhancements, please open an issue on GitHub or add comments directly in the code.
+Bug reports and feature requests should go through GitHub issues.
 
 ## License
 
-You are welcome to use this site as you see fit. If you're using the live version of AnonymZ.io, feel free to utilize it without restrictions. However, self-hosting requires a different approach—if you deploy your own instance, please review and modify the code to suit your specific needs. You may remove the "View on GitHub" button and instead integrate the provided code within the body for a cleaner implementation. If you modify or rebuild the site, or use parts of it, you must also ensure the source code location remains visible.
+You may use the live AnonymZ.io service without restriction. Self-hosting is permitted; if you deploy your own instance, review and adjust the code for your environment. You may remove the "View on GitHub" button, but if you modify, rebuild, or reuse parts of this project, the source code location must remain visible somewhere in your deployment.
+
+Reference snippet for a floating GitHub link, if not using the button in `index.html`:
+
 ```html
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
 
@@ -135,7 +147,7 @@ You are welcome to use this site as you see fit. If you're using the live versio
   }
 </style>
 
-<a href="https://github.com/Finch-Studio/AnonymZ" target="_blank" class="github-link">
+<a href="https://github.com/Afinity-Labs/AnonymZ" target="_blank" class="github-link">
   <div class="github-button">
     <i class="fa-brands fa-github"></i>
   </div>
@@ -143,14 +155,14 @@ You are welcome to use this site as you see fit. If you're using the live versio
 </a>
 ```
 
-Thank you for supporting AnonymZ.io!
+Note: the CDN stylesheet above (`cdnjs.cloudflare.com`) will not load under this project's own Content-Security-Policy, which restricts `style-src` to `'self' 'unsafe-inline'`. If you use this snippet on a deployment that inherits this repository's `.htaccess`, either self-host the Font Awesome CSS or add the CDN origin to `style-src`.
 
-# donate
+## Donations
 
-Thank you ❤️ for considering to donate to me. Here are several ways you may do so:
+**PayPal:** https://paypal.me/FinchStudio
 
-[![PayPal](https://srv-cdn.himpfen.io/badges/paypal/paypal-flat.svg)](https://paypal.me/FinchStudio) 
+**Bitcoin (BTC):** `bc1qfnpg8lvw65349utkezqx8j484ng0dlgv4x0cns`
 
-**Bitcoin (BTC):** `bc1qfnpg8lvw65349utkezqx8j484ng0dlgv4x0cns` <br />
-**Ethereum (ETH):** `0x3F3AAc69d3Eb2A397670651d04355650d39e5d0f` <br />
+**Ethereum (ETH):** `0x3F3AAc69d3Eb2A397670651d04355650d39e5d0f`
+
 **Solana (SOL):** `9J3TdWRXF5EJALtDZcaikqF5vhEihT8AMxnjm3VGkzVL`
