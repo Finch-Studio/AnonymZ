@@ -61,16 +61,12 @@ document.addEventListener('DOMContentLoaded', function () {
   // -------------------------------
 
   window.generateAnonymizedUrl = function () {
-    let rawInput = document.getElementById('urlInput').value.trim();
+    const rawInput = document.getElementById('urlInput').value.trim();
     if (!rawInput) return;
 
-    // If user pasted an already-encoded URL, decode it once
-    try {
-      rawInput = decodeURIComponent(rawInput);
-    } catch (_) {
-      // Ignore malformed encoding
-    }
-
+    // Encode exactly once. redirect.php decodes exactly one layer back,
+    // so pre-decoding here would strip any percent-encoding that's
+    // actually part of the destination URL itself (e.g. %20 or %25).
     const anonymizedUrl =
       'https://anonymz.io/?' + encodeURIComponent(rawInput);
 

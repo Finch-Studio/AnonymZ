@@ -29,15 +29,21 @@ function shouldDelayRedirect(array $queryParams): bool {
     return count($queryParams) > 3 || strlen(http_build_query($queryParams)) > 100;
 }
 
-function normalizeInputUrl(): string {
+/**
+ * Returns [url, needsDecode]. PHP already URL-decodes $_GET values once
+ * when parsing the query string, so that path needs no further decoding.
+ * The raw REQUEST_URI passthrough is untouched by PHP and carries exactly
+ * one layer of encoding (added by assets/app.js), so it needs one decode.
+ */
+function normalizeInputUrl(): array {
     if (!empty($_GET['url'])) {
         // Direct access: /redirect.php?url=https://example.com
-        return trim($_GET['url']);
+        return [trim($_GET['url']), false];
     }
 
     // Root passthrough: https://anonymz.io/?https://example.com
     $uri = $_SERVER['REQUEST_URI'] ?? '';
-    return trim(ltrim($uri, '/?'));
+    return [trim(ltrim($uri, '/?')), true];
 }
 
 /**
@@ -97,7 +103,7 @@ function sendFailureWebhook(string $error, string $inputUrl): void
 // Init
 // --------------------------------------------------
 
-$inputUrl    = normalizeInputUrl();
+[$inputUrl, $needsDecode] = normalizeInputUrl();
 $finalUrl    = '';
 $queryParams = [];
 $error       = null;
@@ -110,13 +116,12 @@ if ($inputUrl === '') {
     $error = 'Missing destination URL.';
 } else {
 
-    // Decode up to 3 times (safe against over-decoding)
-    for ($i = 0; $i < 3; $i++) {
-        $decoded = urldecode($inputUrl);
-        if ($decoded === $inputUrl) {
-            break;
-        }
-        $inputUrl = $decoded;
+    // Decode exactly one layer of encoding. Looping "until stable" here
+    // would keep eating into the destination URL's own percent-encoding
+    // (e.g. %20 in a query value, or %25 in a Wikipedia title), corrupting
+    // any destination that legitimately contains encoded characters.
+    if ($needsDecode) {
+        $inputUrl = urldecode($inputUrl);
     }
 
     // Normalize spaces after decoding
@@ -274,7 +279,7 @@ http_response_code(200);
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title><?= $finalUrl ? 'Redirecting…' : 'Unable to Redirect'; ?></title>
+    <title><?= $finalUrl ? 'Redirectingâ€¦' : 'Unable to Redirect'; ?></title>
 
     <?php if ($finalUrl && shouldDelayRedirect($queryParams)): ?>
 
